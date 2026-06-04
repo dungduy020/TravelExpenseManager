@@ -399,8 +399,8 @@
 
     function id() { return Date.now().toString(36) + Math.random().toString(36).slice(2); }
     function loadData() {
-      try { return JSON.parse(localStorage.getItem('travelExpenseData')) || structuredClone(defaultData); }
-      catch { return structuredClone(defaultData); }
+      try { return JSON.parse(localStorage.getItem('travelExpenseData')) || JSON.parse(JSON.stringify(defaultData)); }
+      catch { return JSON.parse(JSON.stringify(defaultData)); }
     }
     function saveData() { localStorage.setItem('travelExpenseData', JSON.stringify(data)); }
     function money(n) { return Number(n || 0).toLocaleString('vi-VN') + ' ' + data.trip.currency; }
@@ -645,7 +645,7 @@
 
     function resetAll() {
       if (!confirm('Bạn chắc chắn muốn xóa toàn bộ dữ liệu trên trình duyệt này?')) return;
-      data = structuredClone(defaultData); saveData(); render(); toast('Đã reset dữ liệu');
+      data = JSON.parse(JSON.stringify(defaultData)); saveData(); render(); toast('Đã reset dữ liệu');
     }
 
     document.getElementById('expenseDate').valueAsDate = new Date();
