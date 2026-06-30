@@ -321,7 +321,15 @@
             <button id="expenseSubmitBtn" type="submit">Thêm</button>
           </div>
           <div style="margin-top:12px">
-            <label>Chia cho ai?</label>
+            <div class="row space wrap">
+              <label style="margin:0">🧒 Món chịu riêng (tuỳ chọn) — vd suất ăn của trẻ em</label>
+              <button type="button" class="small secondary" onclick="addCustomSplitRow()">+ Thêm món riêng</button>
+            </div>
+            <div id="customSplits" class="list" style="margin-top:8px"></div>
+            <div id="customSplitHint" class="muted" style="margin-top:6px"></div>
+          </div>
+          <div style="margin-top:12px">
+            <label>Chia đều phần còn lại cho ai?</label>
             <div id="splitPeople" class="checkbox-grid"></div>
           </div>
           <div style="margin-top:12px"><label>Ghi chú</label><textarea id="expenseNote" rows="2" placeholder="Ghi chú thêm nếu cần"></textarea></div>
@@ -337,7 +345,7 @@
           </div>
         </div>
         <div id="expenseTable"></div>
-        <div class="empty" style="margin-top:12px;text-align:left;padding:14px">ℹ️ <strong>TB/người tham gia</strong> = Số tiền khoản chi / số người được chọn ở mục “Chia cho”. Người không được chọn trong khoản chi đó sẽ không bị tính.</div>
+        <div class="empty" style="margin-top:12px;text-align:left;padding:14px">ℹ️ <strong>TB/người tham gia</strong> = (Số tiền khoản chi − tổng các món chịu riêng) / số người được chọn ở mục “Chia đều phần còn lại”. Mỗi <strong>món chịu riêng</strong> (vd suất ăn trẻ em) được tính trọn cho (các) người chịu được chọn, không chia cho cả nhóm.</div>
       </div>
     </section>
 
@@ -398,6 +406,7 @@
     let editingExpenseId = null;
 
     function id() { return Date.now().toString(36) + Math.random().toString(36).slice(2); }
+    function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
     function loadData() {
       try { return JSON.parse(localStorage.getItem('travelExpenseData')) || JSON.parse(JSON.stringify(defaultData)); }
       catch { return JSON.parse(JSON.stringify(defaultData)); }
@@ -439,17 +448,29 @@
     document.getElementById('expenseForm').addEventListener('submit', e => {
       e.preventDefault();
       const splitIds = [...document.querySelectorAll('.split-check:checked')].map(x => x.value);
-      if (!splitIds.length) return toast('Vui lòng chọn ít nhất 1 người để chia');
+      const amount = Number(document.getElementById('expenseAmount').value);
+      const customSplits = readCustomSplits();
+
+      for (const c of customSplits) {
+        if (!(c.amount > 0)) return toast('Mỗi món chịu riêng cần có số tiền > 0');
+        if (!c.bearerIds.length) return toast('Mỗi món chịu riêng cần chọn ít nhất 1 người chịu');
+      }
+      const csTotal = customSplits.reduce((s, c) => s + c.amount, 0);
+      if (csTotal > amount + 0.5) return toast('Tổng món chịu riêng vượt quá số tiền khoản chi');
+      const remaining = amount - csTotal;
+      if (!splitIds.length && !customSplits.length) return toast('Vui lòng chọn người để chia hoặc thêm món chịu riêng');
+      if (remaining > 0.5 && !splitIds.length) return toast('Vẫn còn tiền chia đều — hãy tick người ở "Chia đều phần còn lại" hoặc thêm món chịu riêng cho đủ');
 
       const payload = {
         id: editingExpenseId || id(),
         name: document.getElementById('expenseName').value.trim(),
-        amount: Number(document.getElementById('expenseAmount').value),
+        amount,
         payerId: document.getElementById('expensePayer').value,
         category: document.getElementById('expenseCategory').value,
         date: document.getElementById('expenseDate').value,
         note: document.getElementById('expenseNote').value.trim(),
-        splitIds
+        splitIds,
+        customSplits
       };
 
       if (editingExpenseId) {
@@ -467,9 +488,50 @@
       render();
     });
 
+    function csBearerCheckboxes(selected = []) {
+      return data.people.map(p => `<label class="check-item"><input class="cs-bearer" type="checkbox" value="${p.id}" ${selected.includes(p.id) ? 'checked' : ''}> ${esc(p.name)}</label>`).join('');
+    }
+
+    function addCustomSplitRow(prefill) {
+      const wrap = document.getElementById('customSplits');
+      const row = document.createElement('div');
+      row.className = 'cs-row';
+      row.style = 'border:1px solid var(--border);border-radius:14px;padding:12px;background:#fff';
+      row.innerHTML = `
+        <div class="form-row" style="grid-template-columns:1.4fr 1fr auto;align-items:end">
+          <div><label>Tên người / món</label><input class="cs-label" placeholder="Vd: Suất bé Bi" value="${esc(prefill?.label || '')}"></div>
+          <div><label>Giá tiền</label><input class="cs-amount" type="number" min="0" step="1000" value="${prefill?.amount ?? ''}" oninput="updateCustomHint()"></div>
+          <button type="button" class="small danger" onclick="this.closest('.cs-row').remove(); updateCustomHint()">Xóa</button>
+        </div>
+        <div style="margin-top:8px"><label>Ai trong nhóm chịu khoản này?</label><div class="checkbox-grid cs-bearers">${csBearerCheckboxes(prefill?.bearerIds || [])}</div></div>`;
+      wrap.appendChild(row);
+      updateCustomHint();
+    }
+
+    function readCustomSplits() {
+      return [...document.querySelectorAll('#customSplits .cs-row')].map(row => ({
+        label: row.querySelector('.cs-label').value.trim(),
+        amount: Number(row.querySelector('.cs-amount').value || 0),
+        bearerIds: [...row.querySelectorAll('.cs-bearer:checked')].map(c => c.value)
+      })).filter(c => c.amount > 0 || c.label || c.bearerIds.length);
+    }
+
+    function updateCustomHint() {
+      const hint = document.getElementById('customSplitHint');
+      const cs = readCustomSplits();
+      if (!cs.length) { hint.textContent = ''; return; }
+      const amount = Number(document.getElementById('expenseAmount').value || 0);
+      const csTotal = cs.reduce((s, c) => s + c.amount, 0);
+      const remaining = amount - csTotal;
+      let msg = `Tổng món chịu riêng: ${money(csTotal)} · Còn lại chia đều: ${money(remaining)}`;
+      if (remaining < -0.5) msg += ' ⚠️ vượt quá số tiền khoản chi';
+      hint.textContent = msg;
+      hint.style.color = remaining < -0.5 ? 'var(--danger)' : 'var(--muted)';
+    }
+
     function deletePerson(personId) {
       if (data.people.length <= 1) return toast('Cần ít nhất 1 thành viên');
-      if (data.expenses.some(e => e.payerId === personId || e.splitIds.includes(personId))) return toast('Không thể xóa thành viên đã có khoản chi');
+      if (data.expenses.some(e => e.payerId === personId || e.splitIds.includes(personId) || (e.customSplits || []).some(c => c.bearerIds.includes(personId)))) return toast('Không thể xóa thành viên đã có khoản chi');
       data.people = data.people.filter(p => p.id !== personId); saveData(); render();
     }
     function editExpense(expenseId) {
@@ -484,6 +546,9 @@
       document.getElementById('expenseDate').value = expense.date || '';
       document.getElementById('expenseNote').value = expense.note || '';
       document.querySelectorAll('.split-check').forEach(cb => cb.checked = expense.splitIds.includes(cb.value));
+      document.getElementById('customSplits').innerHTML = '';
+      (expense.customSplits || []).forEach(c => addCustomSplitRow(c));
+      updateCustomHint();
 
       document.getElementById('expenseFormTitle').textContent = '✏️ Chỉnh sửa khoản chi';
       document.getElementById('expenseSubmitBtn').textContent = 'Lưu sửa';
@@ -497,6 +562,8 @@
       document.getElementById('expenseForm').reset();
       document.getElementById('expenseDate').valueAsDate = new Date();
       document.querySelectorAll('.split-check').forEach(cb => cb.checked = true);
+      document.getElementById('customSplits').innerHTML = '';
+      updateCustomHint();
       document.getElementById('expenseFormTitle').textContent = '➕ Thêm khoản chi';
       document.getElementById('expenseSubmitBtn').textContent = 'Thêm';
       document.getElementById('editActions').classList.add('hide');
@@ -525,8 +592,20 @@
       const map = Object.fromEntries(data.people.map(p => [p.id, { person: p, paid: 0, share: 0, balance: 0 }]));
       data.expenses.forEach(e => {
         if (map[e.payerId]) map[e.payerId].paid += e.amount;
-        const each = e.amount / e.splitIds.length;
-        e.splitIds.forEach(pid => { if (map[pid]) map[pid].share += each; });
+        const cs = e.customSplits || [];
+        let csTotal = 0;
+        cs.forEach(c => {
+          csTotal += c.amount;
+          if (!c.bearerIds.length) return;
+          const per = c.amount / c.bearerIds.length;
+          c.bearerIds.forEach(pid => { if (map[pid]) map[pid].share += per; });
+        });
+        const remaining = e.amount - csTotal;
+        const ids = e.splitIds || [];
+        if (remaining > 0 && ids.length) {
+          const each = remaining / ids.length;
+          ids.forEach(pid => { if (map[pid]) map[pid].share += each; });
+        }
       });
       Object.values(map).forEach(x => x.balance = x.paid - x.share);
       return Object.values(map);
@@ -593,11 +672,26 @@
       const fc = filter.value;
       const rows = data.expenses.filter(e => (!q || e.name.toLowerCase().includes(q) || (e.note || '').toLowerCase().includes(q)) && (!fc || e.category === fc));
       document.getElementById('expenseTable').innerHTML = rows.length ? `<table><thead><tr><th>Ngày</th><th>Nội dung</th><th>Số tiền</th><th>Người trả</th><th>Chia cho</th><th>Danh mục</th><th>TB/người tham gia</th><th>Thao tác</th></tr></thead><tbody>${rows.map(e => {
-        const payer = data.people.find(p => p.id === e.payerId)?.name || 'Không rõ';
-        const splits = e.splitIds.map(id => data.people.find(p => p.id === id)?.name).filter(Boolean).join(', ');
-        const splitCount = e.splitIds?.length || 0;
-        const eachShare = splitCount ? e.amount / splitCount : 0;
-        return `<tr><td>${e.date || ''}</td><td><strong>${e.name}</strong><div class="muted">${e.note || ''}</div></td><td><strong>${money(e.amount)}</strong></td><td>${payer}</td><td>${splits}</td><td><span class="pill blue">${e.category}</span></td><td><strong style="color:var(--success)">${money(eachShare)}</strong><div class="muted">${splitCount} người</div></td><td><div class="row"><button class="small warning" onclick="editExpense('${e.id}')">Sửa</button><button class="small danger" onclick="deleteExpense('${e.id}')">Xóa</button></div></td></tr>`;
+        const payerName = data.people.find(p => p.id === e.payerId)?.name || 'Không rõ';
+        const nameOf = pid => data.people.find(p => p.id === pid)?.name || '?';
+        const cs = e.customSplits || [];
+        const csTotal = cs.reduce((s, c) => s + c.amount, 0);
+        const remaining = e.amount - csTotal;
+        const ids = e.splitIds || [];
+        const hasEqual = remaining > 0.5 && ids.length;
+        const eachShare = hasEqual ? remaining / ids.length : 0;
+        const splitNames = ids.map(nameOf).join(', ');
+
+        let splitCell = '';
+        if (hasEqual) splitCell += `<div>${esc(splitNames)} <span class="muted">(chia đều ${money(remaining)})</span></div>`;
+        if (cs.length) splitCell += cs.map(c => `<div class="muted">🧒 ${esc(c.label || 'Món riêng')}: ${money(c.amount)} → ${esc(c.bearerIds.map(nameOf).join(', '))}</div>`).join('');
+        if (!splitCell) splitCell = esc(splitNames) || '—';
+
+        const avgCell = hasEqual
+          ? `<strong style="color:var(--success)">${money(eachShare)}</strong><div class="muted">${ids.length} người chia đều</div>`
+          : `<span class="muted">Chia lẻ theo món</span>`;
+
+        return `<tr><td>${e.date || ''}</td><td><strong>${esc(e.name)}</strong><div class="muted">${esc(e.note || '')}</div></td><td><strong>${money(e.amount)}</strong></td><td>${esc(payerName)}</td><td>${splitCell}</td><td><span class="pill blue">${esc(e.category)}</span></td><td>${avgCell}</td><td><div class="row"><button class="small warning" onclick="editExpense('${e.id}')">Sửa</button><button class="small danger" onclick="deleteExpense('${e.id}')">Xóa</button></div></td></tr>`;
       }).join('')}</tbody></table>` : empty('Chưa có khoản chi phù hợp');
     }
 
@@ -648,6 +742,7 @@
       data = JSON.parse(JSON.stringify(defaultData)); saveData(); render(); toast('Đã reset dữ liệu');
     }
 
+    document.getElementById('expenseAmount').addEventListener('input', updateCustomHint);
     document.getElementById('expenseDate').valueAsDate = new Date();
     render();
   </script>
